@@ -13,11 +13,20 @@ func EncodeSignatureShare(s *tpke.SignatureShare) []byte {
 	return sig
 }
 
-func DecodeSignatureShare(b []byte) *tpke.Signature {
-	var s *tpke.Signature
+func DecodeSignatureShare(b []byte) *tpke.SignatureShare {
+	var s *tpke.SignatureShare
 	err := rlp.DecodeBytes(b, s)
 	if err != nil {
 		panic("failed to decode sig share RLP")
+	}
+	return s
+}
+
+func DecodeSignature(b []byte) *tpke.Signature {
+	var s *tpke.Signature
+	err := rlp.DecodeBytes(b, s)
+	if err != nil {
+		panic("failed to decode sig  RLP")
 	}
 	return s
 }

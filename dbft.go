@@ -258,7 +258,7 @@ func (n *Node) MsgLoop() {
 
 				// verify header and sig
 				checked := commit.FinalHash == util.Uint256(n.finalBlockHash)
-				sig := DecodeSignatureShare(commit.Signature)
+				sig := DecodeSignature(commit.Signature)
 				checked = checked && n.neighborPubKeys[m.ValidatorIndex()].Verify(n.finalBlockHash, sig)
 
 				// increase local height and reset dbft
@@ -267,6 +267,18 @@ func (n *Node) MsgLoop() {
 				}
 
 				if len(n.commits) > len(n.neighbors)*2/3 {
+					// compute the bls signature
+					shares := make(map[int]*tpke.SignatureShare, len(n.commits))
+					for i, v := range n.commits {
+						shares[int(i)] = DecodeSignatureShare(v.Signature)
+					}
+					// the output is not used here, but should be applyed to block in practice
+					_, err := tpke.AggregateAndVerify(n.globalPubKey, n.finalBlockHash, len(n.neighbors)*2/3, shares, n.scaler)
+					if err != nil {
+						// wait for another agree message until change view
+						continue
+					}
+
 					n.height += 1
 					n.view = 0
 					n.viewLock = false
