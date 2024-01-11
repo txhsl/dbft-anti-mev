@@ -1,6 +1,8 @@
 package dbft
 
 import (
+	"fmt"
+
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/trie"
 	"github.com/nspcc-dev/dbft/payload"
@@ -15,9 +17,15 @@ type Node struct {
 	pub             *tpke.PublicKey
 	neighborPubKeys map[uint16]*tpke.PublicKey
 	globalPubKey    *tpke.PublicKey
+	scaler          int
 
-	height           uint64
-	view             byte
+	height         uint64
+	view           byte
+	viewLock       bool
+	txList         []*types.Transaction
+	preblockHash   []byte
+	finalBlockHash []byte
+
 	prepareResponses map[uint16]*msgutil.PrepareResponse
 	agrees           map[uint16]*msgutil.Agree
 	commits          map[uint16]*msgutil.Commit
@@ -28,18 +36,21 @@ type Node struct {
 	txPool         []*types.Transaction
 }
 
-func NewNode(index byte, prv *tpke.PrivateKey, pub *tpke.PublicKey, globalPub *tpke.PublicKey) *Node {
+func NewNode(index byte, prv *tpke.PrivateKey, pub *tpke.PublicKey, globalPub *tpke.PublicKey, scaler int) *Node {
 	return &Node{
 		index:            index,
 		prv:              prv,
 		pub:              pub,
 		neighborPubKeys:  make(map[uint16]*tpke.PublicKey),
 		globalPubKey:     globalPub,
+		scaler:           scaler,
 		height:           0,
 		view:             0,
+		viewLock:         false,
 		neighbors:        make([]chan<- msgutil.Payload, 0),
 		messageHandler:   make(chan msgutil.Payload),
 		txPool:           make([]*types.Transaction, 0),
+		txList:           make([]*types.Transaction, 0),
 		prepareResponses: make(map[uint16]*msgutil.PrepareResponse),
 		agrees:           make(map[uint16]*msgutil.Agree),
 		commits:          make(map[uint16]*msgutil.Commit),
@@ -61,15 +72,40 @@ func (n *Node) PendTx(tx *types.Transaction) {
 	n.txPool = append(n.txPool, tx)
 }
 
-func (n *Node) Propose() *Block {
-	return nil
+func (n *Node) Propose() {
+	txhashes := make([]util.Uint256, len(n.txPool))
+	for i, v := range n.txPool {
+		txhashes[i] = util.Uint256(v.Hash())
+	}
+	txhash := types.DeriveSha(types.Transactions(n.txPool), trie.NewStackTrie(nil))
+	h := &types.Header{
+		TxHash: txhash,
+	}
+
+	// broadcast prepare request
+	msg := msgutil.Payload{
+		Message: msgutil.Message{
+			Type:           payload.PrepareRequestType,
+			ValidatorIndex: n.index,
+			BlockIndex:     n.height + 1,
+			ViewNumber:     n.view + 1,
+		},
+	}
+	msg.SetPayload(msgutil.PrepareRequest{
+		SealingProposal: h,
+		TxHashes:        txhashes,
+	})
+	msg.Sign(n.prv)
+	for i := 0; i < len(n.neighbors); i++ {
+		n.neighbors[i] <- msg
+	}
 }
 
 func (n *Node) MsgLoop() {
 	for {
 		select {
 		case m := <-n.messageHandler:
-			// drop something
+			// drop some scam
 			if m.BlockIndex != n.height+1 {
 				continue
 			}
@@ -104,6 +140,10 @@ func (n *Node) MsgLoop() {
 				}
 				hChecked := types.DeriveSha(types.Transactions(txs), trie.NewStackTrie(nil)) == h.TxHash
 
+				// for further use
+				n.txList = txs
+				n.preblockHash = h.Hash().Bytes()
+
 				// broadcast response
 				if txsChecked && hChecked {
 					msg := msgutil.Payload{
@@ -127,7 +167,7 @@ func (n *Node) MsgLoop() {
 				prepareResponse := m.Payload().(msgutil.PrepareResponse)
 
 				// verify response
-				checked := prepareResponse.PreparationHash != util.Uint256{}
+				checked := prepareResponse.PreparationHash == util.Uint256(n.preblockHash)
 
 				// count vote
 				if checked {
@@ -136,6 +176,11 @@ func (n *Node) MsgLoop() {
 
 				if len(n.prepareResponses) > len(n.neighbors)*2/3 {
 					// decrypt anti-mev tx
+					s := make([]*tpke.DecryptionShare, 0)
+					for i, v := range n.txList {
+						s[i] = n.prv.DecryptShare(DecodeCiphertext(v.Data()))
+					}
+					share := EncodeDecryptionShare(s)
 
 					// broadcast agree
 					for i := 0; i < len(n.neighbors); i++ {
@@ -148,8 +193,7 @@ func (n *Node) MsgLoop() {
 							},
 						}
 						msg.SetPayload(msgutil.Agree{
-							DecryptShare: nil,
-							Signature:    nil,
+							DecryptShare: share,
 						})
 						msg.Sign(n.prv)
 						for i := 0; i < len(n.neighbors); i++ {
@@ -160,22 +204,37 @@ func (n *Node) MsgLoop() {
 			} else if m.Type() == msgutil.AgreeType {
 				agree := m.Payload().(msgutil.Agree)
 
-				// verify share
-				checked := agree.DecryptShare != nil
-
-				// lock change view
-
-				// decrypt tx data
-
-				// build the final block
-
 				// count vote
-				if checked {
-					n.agrees[m.ValidatorIndex()] = &agree
-				}
+				n.agrees[m.ValidatorIndex()] = &agree
 
-				// broadcast commit
 				if len(n.agrees) > len(n.neighbors)*2/3 {
+					// try decrypt tx data
+					c := make([]*tpke.CipherText, len(n.txList))
+					for i, v := range n.txList {
+						c[i] = DecodeCiphertext(v.Data())
+					}
+					inputs := make(map[int][]*tpke.DecryptionShare)
+					for i, v := range n.agrees {
+						share := DecodeDecryptionShare(v.DecryptShare)
+						inputs[int(i)] = share
+					}
+					data, err := tpke.Decrypt(c, inputs, n.globalPubKey, len(n.neighbors)*2/3, n.scaler)
+					if err != nil {
+						// wait for another agree message until change view
+						continue
+					}
+
+					// build the final block
+					// Temporarily use the same block here, let just verify the decrypted data
+					n.finalBlockHash = n.preblockHash
+					for _, v := range data {
+						fmt.Println(v)
+					}
+
+					// lock change view
+					n.viewLock = true
+
+					// broadcast commit
 					msg := msgutil.Payload{
 						Message: msgutil.Message{
 							Type:           payload.CommitType,
@@ -184,9 +243,10 @@ func (n *Node) MsgLoop() {
 							ViewNumber:     m.ViewNumber(),
 						},
 					}
+
 					msg.SetPayload(msgutil.Commit{
-						FinalHash: nil,
-						Signature: nil,
+						FinalHash: util.Uint256(n.finalBlockHash),
+						Signature: EncodeSignatureShare(n.prv.SignShare(n.finalBlockHash)),
 					})
 					msg.Sign(n.prv)
 					for i := 0; i < len(n.neighbors); i++ {
@@ -197,7 +257,9 @@ func (n *Node) MsgLoop() {
 				commit := m.Payload().(msgutil.Commit)
 
 				// verify header and sig
-				checked := commit.FinalHash != util.Uint256{}
+				checked := commit.FinalHash == util.Uint256(n.finalBlockHash)
+				sig := DecodeSignatureShare(commit.Signature)
+				checked = checked && n.neighborPubKeys[m.ValidatorIndex()].Verify(n.finalBlockHash, sig)
 
 				// increase local height and reset dbft
 				if checked {
@@ -207,12 +269,13 @@ func (n *Node) MsgLoop() {
 				if len(n.commits) > len(n.neighbors)*2/3 {
 					n.height += 1
 					n.view = 0
+					n.viewLock = false
 				}
 			} else if m.Type() == payload.ChangeViewType {
 				changeView := m.Payload().(msgutil.ChangeView)
 
 				// count vote
-				if changeView.NewViewNumber == n.view+1 {
+				if changeView.NewViewNumber == n.view+1 && !n.viewLock {
 					n.changeViews[m.ValidatorIndex()] = &changeView
 				}
 

@@ -8,7 +8,7 @@ import (
 type Commit struct {
 	FinalHash util.Uint256
 	// commit.signature is the signature of final block
-	Signature [extraSeal]byte
+	Signature []byte
 }
 
 func (c Commit) EncodeBinary(w *io.BinWriter) {
