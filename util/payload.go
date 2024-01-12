@@ -1,6 +1,8 @@
 package util
 
 import (
+	"fmt"
+
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/nspcc-dev/dbft/payload"
@@ -107,17 +109,51 @@ func (p *Payload) SetHeight(h uint32) {
 	p.Message.BlockIndex = uint64(h)
 }
 
+// EncodeBinary implements the io.Serializable interface.
+func (m *Message) EncodeBinary(w *io.BinWriter) {
+	w.WriteB(byte(m.Type))
+	w.WriteU64LE(m.BlockIndex)
+	w.WriteB(m.ValidatorIndex)
+	w.WriteB(m.ViewNumber)
+	m.payload.EncodeBinary(w)
+}
+
+// DecodeBinary implements the io.Serializable interface.
+func (m *Message) DecodeBinary(r *io.BinReader) {
+	m.Type = (payload.MessageType)(r.ReadB())
+	m.BlockIndex = r.ReadU64LE()
+	m.ValidatorIndex = r.ReadB()
+	m.ViewNumber = r.ReadB()
+
+	switch m.Type {
+	case payload.ChangeViewType:
+		cv := new(ChangeView)
+		// newViewNumber is not marshaled
+		cv.NewViewNumber = m.ViewNumber + 1
+		m.payload = cv
+	case payload.PrepareRequestType:
+		m.payload = new(PrepareRequest)
+	case payload.PrepareResponseType:
+		m.payload = new(PrepareResponse)
+	case payload.CommitType:
+		m.payload = new(Commit)
+	// case recoveryRequestType:
+	// 	m.payload = new(recoveryRequest)
+	// case recoveryMessageType:
+	// 	m.payload = new(recoveryMessage)
+	default:
+		r.Err = fmt.Errorf("invalid type: 0x%02x", byte(m.Type))
+		return
+	}
+	m.payload.DecodeBinary(r)
+}
+
 func (p *Payload) Sign(prv *tpke.PrivateKey) {
 	b, err := rlp.EncodeToBytes(p.Message)
 	if err != nil {
 		panic("failed to encode msg to RLP")
 	}
-	share := prv.SignShare(b)
-	s, err := rlp.EncodeToBytes(share)
-	if err != nil {
-		panic("failed to encode sig share to RLP")
-	}
-	p.witness = s
+	p.witness = prv.SignShare(b).ToBytes()
 }
 
 func (p *Payload) Verify(pub *tpke.PublicKey) bool {
@@ -125,10 +161,9 @@ func (p *Payload) Verify(pub *tpke.PublicKey) bool {
 	if err != nil {
 		panic("failed to encode msg to RLP")
 	}
-	var sig *tpke.Signature
-	err = rlp.DecodeBytes(p.witness, sig)
+	s, err := tpke.BytesToSigShare(p.witness)
 	if err != nil {
-		panic("failed to decode sig RLP")
+		panic("failed to decode sig")
 	}
-	return pub.Verify(b, sig)
+	return pub.VerifySigShare(b, s)
 }

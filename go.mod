@@ -6,7 +6,7 @@ require (
 	github.com/ethereum/go-ethereum v1.13.8
 	github.com/nspcc-dev/dbft v0.0.0-20231219060356-6008c73c109e
 	github.com/nspcc-dev/neo-go v0.73.1-pre.0.20200303142215-f5a1b928ce09
-	github.com/txhsl/tpke v0.1.1
+	github.com/txhsl/tpke v0.1.5
 )
 
 require (
