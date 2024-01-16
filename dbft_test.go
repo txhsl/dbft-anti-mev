@@ -9,7 +9,8 @@ import (
 	"github.com/ethereum/go-ethereum/trie"
 	"github.com/nspcc-dev/dbft/payload"
 	"github.com/nspcc-dev/neo-go/pkg/util"
-	msgutil "github.com/txhsl/dbft-anti-mev/util"
+	"github.com/txhsl/dbft-anti-mev/util/message"
+	"github.com/txhsl/dbft-anti-mev/util/transaction"
 	"github.com/txhsl/tpke"
 )
 
@@ -26,17 +27,16 @@ func TestPrepareRequestHandler(t *testing.T) {
 	prvs := dkg.GetPrivateKeys()
 	globalpub := dkg.PublishGlobalPublicKey()
 
-	// setup node, note that dkg index start from 1 to 7
-	node := NewNode(1, prvs[1], prvs[1].GetPublicKey(), globalpub, dkg.GetScaler())
-	neighbors := make([]*Node, 6)
-	for i := 0; i < 6; i++ {
-		neighbors[i] = NewNode(byte(i+2), prvs[i+2], prvs[i+2].GetPublicKey(), globalpub, dkg.GetScaler())
+	// setup node, note that dkg index start from 1 to 7, due to mathematical reason
+	nodes := make([]*Node, 7)
+	for i := 0; i < 7; i++ {
+		nodes[i] = NewNode(byte(i+1), prvs[i+1], prvs[i+1].GetPublicKey(), globalpub, dkg.GetScaler())
 	}
-	node.Connect(neighbors)
+	nodes[0].Connect(nodes)
 
-	// send an enveloped tx
+	// send a tx
 	tx := types.NewTransaction(1, ZeroAddress, big.NewInt(0), 0, big.NewInt(0), nil)
-	node.PendTx(tx)
+	nodes[0].PendTx(tx)
 
 	// build header and msg
 	txs := make([]*types.Transaction, 1)
@@ -48,35 +48,103 @@ func TestPrepareRequestHandler(t *testing.T) {
 	}
 
 	// send a message
-	prepareRequest := &msgutil.Payload{
-		Message: msgutil.Message{
+	prepareRequest := &message.Payload{
+		Message: message.Message{
 			Type:           payload.PrepareRequestType,
 			ValidatorIndex: 2,
 			BlockIndex:     1,
 			ViewNumber:     0,
 		},
 	}
-	prepareRequest.SetPayload(msgutil.PrepareRequest{
+	prepareRequest.SetPayload(message.PrepareRequest{
 		SealingProposal: header,
 		TxHashes:        hashes,
 	})
 	prepareRequest.Sign(prvs[2])
-	node.HandleMsg(prepareRequest)
-}
-
-func TestPrepareResponseHandler(t *testing.T) {
-
-}
-func TestAgreeHandler(t *testing.T) {
-
-}
-func TestCommitHandler(t *testing.T) {
-
-}
-func TestPropose(t *testing.T) {
-
+	nodes[0].HandleMsg(prepareRequest)
 }
 
 func TestDBFT(t *testing.T) {
+	dkg := tpke.NewDKG(7, 4)
+	dkg.Prepare()
+	err := dkg.Verify()
+	if err != nil {
+		t.Fatalf(err.Error())
+	}
+	prvs := dkg.GetPrivateKeys()
+	globalpub := dkg.PublishGlobalPublicKey()
 
+	// setup node, note that dkg index start from 1 to 7, due to mathematical reason
+	nodes := make([]*Node, 7)
+	for i := 0; i < 7; i++ {
+		nodes[i] = NewNode(byte(i+1), prvs[i+1], prvs[i+1].GetPublicKey(), globalpub, dkg.GetScaler())
+	}
+	for i := 0; i < 7; i++ {
+		nodes[i].Connect(nodes)
+	}
+
+	// create an enveloped tx, use string as an example
+	msg := "This is some necessary info of an enveloped tx"
+	seed := tpke.RandPG1()
+	es := globalpub.Encrypt(seed)
+	et, err := tpke.AESEncrypt(seed, []byte(msg))
+	if err != nil {
+		t.Fatalf(err.Error())
+	}
+	envelope := &transaction.Envelope{
+		EncryptedSeed:        es,
+		EncryptedTransaction: et,
+	}
+
+	// wrap the enveloped tx into a normal transfer
+	tx := types.NewTransaction(1, ZeroAddress, big.NewInt(0), 0, big.NewInt(0), envelope.ToBytes())
+	for i := 0; i < 7; i++ {
+		nodes[i].PendTx(tx)
+	}
+
+	// start a consensus
+	nodes[0].Propose()
+
+	// handle prepare request
+	for i := 0; i < 7; i++ {
+		nodes[i].EventLoopOnce()
+	}
+
+	// handle prepare response
+	for j := 0; j < 6; j++ {
+		nodes[0].EventLoopOnce()
+	}
+	for i := 1; i < 7; i++ {
+		for j := 0; j < 5; j++ {
+			nodes[i].EventLoopOnce()
+		}
+	}
+
+	// handle agree
+	for i := 0; i < 7; i++ {
+		for j := 0; j < 6; j++ {
+			nodes[i].EventLoopOnce()
+		}
+	}
+
+	// handle commit
+	for i := 0; i < 7; i++ {
+		for j := 0; j < 6; j++ {
+			nodes[i].EventLoopOnce()
+		}
+	}
+
+	for i := 0; i < 7; i++ {
+		if nodes[i].height < 1 {
+			t.Fatalf("invalid consensus")
+		}
+	}
+}
+
+func (n *Node) EventLoopOnce() {
+	if len(n.messageHandler) == 0 {
+		return
+	}
+	m := <-n.messageHandler
+	n.HandleMsg(m)
 }

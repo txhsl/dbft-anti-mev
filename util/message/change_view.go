@@ -1,4 +1,4 @@
-package util
+package message
 
 import (
 	"github.com/nspcc-dev/dbft/payload"

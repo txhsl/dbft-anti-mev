@@ -1,66 +1,45 @@
 package dbft
 
 import (
-	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/txhsl/tpke"
 )
 
 func EncodeSignatureShare(s *tpke.SignatureShare) []byte {
-	sig, err := rlp.EncodeToBytes(s)
-	if err != nil {
-		panic("failed to encode sig share to RLP")
-	}
-	return sig
+	return s.ToBytes()
 }
 
 func DecodeSignatureShare(b []byte) *tpke.SignatureShare {
-	var s *tpke.SignatureShare
-	err := rlp.DecodeBytes(b, s)
+	s, err := tpke.BytesToSigShare(b)
 	if err != nil {
-		panic("failed to decode sig share RLP")
+		panic("failed to decode sig share")
 	}
 	return s
 }
 
 func DecodeSignature(b []byte) *tpke.Signature {
-	var s *tpke.Signature
-	err := rlp.DecodeBytes(b, s)
+	s, err := tpke.BytesToSig(b)
 	if err != nil {
-		panic("failed to decode sig  RLP")
+		panic("failed to decode sig")
 	}
 	return s
 }
 
-func EncodeCiphertext(c *tpke.CipherText) []byte {
-	b, err := rlp.EncodeToBytes(c)
-	if err != nil {
-		panic("failed to encode ciphertext to RLP")
+func EncodeDecryptionShare(ss []*tpke.DecryptionShare) [][]byte {
+	bs := make([][]byte, len(ss))
+	for i := 0; i < len(ss); i++ {
+		bs[i] = ss[i].ToBytes()
 	}
-	return b
+	return bs
 }
 
-func DecodeCiphertext(b []byte) *tpke.CipherText {
-	var c *tpke.CipherText
-	err := rlp.DecodeBytes(b, c)
-	if err != nil {
-		panic("failed to decode ciphertext RLP")
+func DecodeDecryptionShare(bs [][]byte) []*tpke.DecryptionShare {
+	ss := make([]*tpke.DecryptionShare, len(bs))
+	for i := 0; i < len(bs); i++ {
+		s, err := tpke.BytesToDecryptionShare(bs[i])
+		if err != nil {
+			panic("failed to decode share")
+		}
+		ss[i] = s
 	}
-	return c
-}
-
-func EncodeDecryptionShare(c []*tpke.DecryptionShare) []byte {
-	b, err := rlp.EncodeToBytes(c)
-	if err != nil {
-		panic("failed to encode share to RLP")
-	}
-	return b
-}
-
-func DecodeDecryptionShare(b []byte) []*tpke.DecryptionShare {
-	var s []*tpke.DecryptionShare
-	err := rlp.DecodeBytes(b, s)
-	if err != nil {
-		panic("failed to decode share RLP")
-	}
-	return s
+	return ss
 }

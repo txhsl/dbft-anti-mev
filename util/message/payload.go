@@ -1,4 +1,4 @@
-package util
+package message
 
 import (
 	"fmt"
@@ -63,21 +63,21 @@ func (p *Payload) SetPayload(pl any) {
 	p.payload = pl.(io.Serializable)
 }
 
-// GetChangeView implements the payload.ConsensusPayload interface.
-func (p Payload) GetChangeView() payload.ChangeView { return p.payload.(payload.ChangeView) }
+// GetChangeView implements the ConsensusPayload interface.
+func (p Payload) GetChangeView() ChangeView { return p.payload.(ChangeView) }
 
-// GetPrepareRequest implements the payload.ConsensusPayload interface.
-func (p Payload) GetPrepareRequest() payload.PrepareRequest {
-	return p.payload.(payload.PrepareRequest)
+// GetPrepareRequest implements the ConsensusPayload interface.
+func (p Payload) GetPrepareRequest() PrepareRequest {
+	return p.payload.(PrepareRequest)
 }
 
-// GetPrepareResponse implements the payload.ConsensusPayload interface.
-func (p Payload) GetPrepareResponse() payload.PrepareResponse {
-	return p.payload.(payload.PrepareResponse)
+// GetPrepareResponse implements the ConsensusPayload interface.
+func (p Payload) GetPrepareResponse() PrepareResponse {
+	return p.payload.(PrepareResponse)
 }
 
-// GetCommit implements the payload.ConsensusPayload interface.
-func (p Payload) GetCommit() payload.Commit { return p.payload.(payload.Commit) }
+// GetCommit implements the ConsensusPayload interface.
+func (p Payload) GetCommit() Commit { return p.payload.(Commit) }
 
 // GetRecoveryRequest implements the payload.ConsensusPayload interface.
 func (p Payload) GetRecoveryRequest() payload.RecoveryRequest {

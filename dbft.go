@@ -3,11 +3,13 @@ package dbft
 import (
 	"fmt"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/trie"
 	"github.com/nspcc-dev/dbft/payload"
 	"github.com/nspcc-dev/neo-go/pkg/util"
-	msgutil "github.com/txhsl/dbft-anti-mev/util"
+	"github.com/txhsl/dbft-anti-mev/util/message"
+	"github.com/txhsl/dbft-anti-mev/util/transaction"
 	"github.com/txhsl/tpke"
 )
 
@@ -23,16 +25,16 @@ type Node struct {
 	view           byte
 	viewLock       bool
 	txList         []*types.Transaction
-	preblockHash   []byte
-	finalBlockHash []byte
+	preblockHash   common.Hash
+	finalBlockHash common.Hash
 
-	prepareResponses map[uint16]*msgutil.PrepareResponse
-	agrees           map[uint16]*msgutil.Agree
-	commits          map[uint16]*msgutil.Commit
-	changeViews      map[uint16]*msgutil.ChangeView
+	prepareResponses map[uint16]*message.PrepareResponse
+	agrees           map[uint16]*message.Agree
+	commits          map[uint16]*message.Commit
+	changeViews      map[uint16]*message.ChangeView
 
-	neighbors      []chan<- *msgutil.Payload
-	messageHandler chan *msgutil.Payload
+	neighbors      []chan<- *message.Payload
+	messageHandler chan *message.Payload
 	txPool         []*types.Transaction
 }
 
@@ -47,14 +49,14 @@ func NewNode(index byte, prv *tpke.PrivateKey, pub *tpke.PublicKey, globalPub *t
 		height:           0,
 		view:             0,
 		viewLock:         false,
-		neighbors:        make([]chan<- *msgutil.Payload, 0),
-		messageHandler:   make(chan *msgutil.Payload, 100),
+		neighbors:        make([]chan<- *message.Payload, 0),
+		messageHandler:   make(chan *message.Payload, 100),
 		txPool:           make([]*types.Transaction, 0),
 		txList:           make([]*types.Transaction, 0),
-		prepareResponses: make(map[uint16]*msgutil.PrepareResponse),
-		agrees:           make(map[uint16]*msgutil.Agree),
-		commits:          make(map[uint16]*msgutil.Commit),
-		changeViews:      make(map[uint16]*msgutil.ChangeView),
+		prepareResponses: make(map[uint16]*message.PrepareResponse),
+		agrees:           make(map[uint16]*message.Agree),
+		commits:          make(map[uint16]*message.Commit),
+		changeViews:      make(map[uint16]*message.ChangeView),
 	}
 }
 
@@ -62,7 +64,7 @@ func (n *Node) GetIndex() byte {
 	return n.index
 }
 
-func (n *Node) GetHandler() chan<- *msgutil.Payload {
+func (n *Node) GetHandler() chan<- *message.Payload {
 	return n.messageHandler
 }
 
@@ -72,6 +74,9 @@ func (n *Node) GetPublicKey() *tpke.PublicKey {
 
 func (n *Node) Connect(ns []*Node) {
 	for _, v := range ns {
+		if v.index == n.index {
+			continue
+		}
 		n.neighbors = append(n.neighbors, v.GetHandler())
 		n.neighborPubKeys[uint16(v.GetIndex())] = v.GetPublicKey()
 	}
@@ -90,17 +95,19 @@ func (n *Node) Propose() {
 	h := &types.Header{
 		TxHash: txhash,
 	}
+	n.preblockHash = h.Hash()
+	n.txList = n.txPool
 
 	// broadcast prepare request
-	msg := &msgutil.Payload{
-		Message: msgutil.Message{
+	msg := &message.Payload{
+		Message: message.Message{
 			Type:           payload.PrepareRequestType,
 			ValidatorIndex: n.index,
 			BlockIndex:     n.height + 1,
-			ViewNumber:     n.view + 1,
+			ViewNumber:     n.view,
 		},
 	}
-	msg.SetPayload(msgutil.PrepareRequest{
+	msg.SetPayload(message.PrepareRequest{
 		SealingProposal: h,
 		TxHashes:        txhashes,
 	})
@@ -110,7 +117,7 @@ func (n *Node) Propose() {
 	}
 }
 
-func (n *Node) HandleMsg(m *msgutil.Payload) {
+func (n *Node) HandleMsg(m *message.Payload) {
 	// drop some scam
 	if m.BlockIndex != n.height+1 {
 		return
@@ -124,7 +131,7 @@ func (n *Node) HandleMsg(m *msgutil.Payload) {
 
 	// handle
 	if m.Type() == payload.PrepareRequestType {
-		prepareRequest := m.Payload().(msgutil.PrepareRequest)
+		prepareRequest := m.Payload().(message.PrepareRequest)
 		h := prepareRequest.SealingProposal
 		txhs := prepareRequest.TxHashes
 
@@ -148,19 +155,19 @@ func (n *Node) HandleMsg(m *msgutil.Payload) {
 
 		// for further use
 		n.txList = txs
-		n.preblockHash = h.Hash().Bytes()
+		n.preblockHash = h.Hash()
 
 		// broadcast response
 		if txsChecked && hChecked {
-			msg := &msgutil.Payload{
-				Message: msgutil.Message{
+			msg := &message.Payload{
+				Message: message.Message{
 					Type:           payload.PrepareResponseType,
 					ValidatorIndex: n.index,
 					BlockIndex:     m.BlockIndex,
 					ViewNumber:     m.ViewNumber(),
 				},
 			}
-			msg.SetPayload(msgutil.PrepareResponse{
+			msg.SetPayload(message.PrepareResponse{
 				PreparationHash: util.Uint256(h.Hash()),
 			})
 			msg.Sign(n.prv)
@@ -169,7 +176,7 @@ func (n *Node) HandleMsg(m *msgutil.Payload) {
 			}
 		}
 	} else if m.Type() == payload.PrepareResponseType {
-		prepareResponse := m.Payload().(msgutil.PrepareResponse)
+		prepareResponse := m.Payload().(message.PrepareResponse)
 
 		// verify response
 		checked := prepareResponse.PreparationHash == util.Uint256(n.preblockHash)
@@ -179,51 +186,59 @@ func (n *Node) HandleMsg(m *msgutil.Payload) {
 			n.prepareResponses[m.ValidatorIndex()] = &prepareResponse
 		}
 
-		if len(n.prepareResponses) > len(n.neighbors)*2/3 {
-			// decrypt anti-mev tx
+		if len(n.prepareResponses) == len(n.neighbors)*2/3+1 {
+			// generate decrypt share for anti-mev tx
 			s := make([]*tpke.DecryptionShare, 0)
-			for i, v := range n.txList {
-				s[i] = n.prv.DecryptShare(DecodeCiphertext(v.Data()))
+			for _, v := range n.txList {
+				envelope, err := transaction.BytesToEnvelope(v.Data())
+				if err != nil {
+					continue
+				}
+				s = append(s, n.prv.DecryptShare(envelope.EncryptedSeed))
 			}
 			share := EncodeDecryptionShare(s)
 
 			// broadcast agree
+			msg := &message.Payload{
+				Message: message.Message{
+					Type:           message.AgreeType,
+					ValidatorIndex: n.index,
+					BlockIndex:     m.BlockIndex,
+					ViewNumber:     m.ViewNumber(),
+				},
+			}
+			msg.SetPayload(message.Agree{
+				DecryptShare: share,
+			})
+			msg.Sign(n.prv)
 			for i := 0; i < len(n.neighbors); i++ {
-				msg := &msgutil.Payload{
-					Message: msgutil.Message{
-						Type:           msgutil.AgreeType,
-						ValidatorIndex: n.index,
-						BlockIndex:     m.BlockIndex,
-						ViewNumber:     m.ViewNumber(),
-					},
-				}
-				msg.SetPayload(msgutil.Agree{
-					DecryptShare: share,
-				})
-				msg.Sign(n.prv)
-				for i := 0; i < len(n.neighbors); i++ {
-					n.neighbors[i] <- msg
-				}
+				n.neighbors[i] <- msg
 			}
 		}
-	} else if m.Type() == msgutil.AgreeType {
-		agree := m.Payload().(msgutil.Agree)
+	} else if m.Type() == message.AgreeType {
+		agree := m.Payload().(message.Agree)
 
 		// count vote
 		n.agrees[m.ValidatorIndex()] = &agree
 
-		if len(n.agrees) > len(n.neighbors)*2/3 {
+		if len(n.agrees) == len(n.neighbors)*2/3+1 {
 			// try decrypt tx data
-			c := make([]*tpke.CipherText, len(n.txList))
-			for i, v := range n.txList {
-				c[i] = DecodeCiphertext(v.Data())
+			es := make([]*transaction.Envelope, 0)
+			cs := make([]*tpke.CipherText, 0)
+			for _, v := range n.txList {
+				envelope, err := transaction.BytesToEnvelope(v.Data())
+				if err != nil {
+					continue
+				}
+				es = append(es, envelope)
+				cs = append(cs, envelope.EncryptedSeed)
 			}
 			inputs := make(map[int][]*tpke.DecryptionShare)
 			for i, v := range n.agrees {
 				share := DecodeDecryptionShare(v.DecryptShare)
 				inputs[int(i)] = share
 			}
-			data, err := tpke.Decrypt(c, inputs, n.globalPubKey, len(n.neighbors)*2/3, n.scaler)
+			seeds, err := tpke.Decrypt(cs, inputs, n.globalPubKey, len(n.neighbors)*2/3, n.scaler)
 			if err != nil {
 				// wait for another agree message until change view
 				return
@@ -232,16 +247,20 @@ func (n *Node) HandleMsg(m *msgutil.Payload) {
 			// build the final block
 			// Temporarily use the same block here, let just verify the decrypted data
 			n.finalBlockHash = n.preblockHash
-			for _, v := range data {
-				fmt.Println(v)
+			for i, v := range es {
+				data, err := tpke.AESDecrypt(seeds[i], v.EncryptedTransaction)
+				if err != nil {
+					continue
+				}
+				fmt.Println(string(data))
 			}
 
 			// lock change view
 			n.viewLock = true
 
 			// broadcast commit
-			msg := &msgutil.Payload{
-				Message: msgutil.Message{
+			msg := &message.Payload{
+				Message: message.Message{
 					Type:           payload.CommitType,
 					ValidatorIndex: n.index,
 					BlockIndex:     m.BlockIndex,
@@ -249,9 +268,9 @@ func (n *Node) HandleMsg(m *msgutil.Payload) {
 				},
 			}
 
-			msg.SetPayload(msgutil.Commit{
+			msg.SetPayload(message.Commit{
 				FinalHash: util.Uint256(n.finalBlockHash),
-				Signature: EncodeSignatureShare(n.prv.SignShare(n.finalBlockHash)),
+				Signature: EncodeSignatureShare(n.prv.SignShare(n.finalBlockHash.Bytes())),
 			})
 			msg.Sign(n.prv)
 			for i := 0; i < len(n.neighbors); i++ {
@@ -259,26 +278,26 @@ func (n *Node) HandleMsg(m *msgutil.Payload) {
 			}
 		}
 	} else if m.Type() == payload.CommitType {
-		commit := m.Payload().(msgutil.Commit)
+		commit := m.Payload().(message.Commit)
 
 		// verify header and sig
 		checked := commit.FinalHash == util.Uint256(n.finalBlockHash)
 		sig := DecodeSignature(commit.Signature)
-		checked = checked && n.neighborPubKeys[m.ValidatorIndex()].VerifySig(n.finalBlockHash, sig)
+		checked = checked && n.neighborPubKeys[m.ValidatorIndex()].VerifySig(n.finalBlockHash.Bytes(), sig)
 
 		// increase local height and reset dbft
 		if checked {
 			n.commits[m.ValidatorIndex()] = &commit
 		}
 
-		if len(n.commits) > len(n.neighbors)*2/3 {
+		if len(n.commits) == len(n.neighbors)*2/3+1 {
 			// compute the bls signature
 			shares := make(map[int]*tpke.SignatureShare, len(n.commits))
 			for i, v := range n.commits {
 				shares[int(i)] = DecodeSignatureShare(v.Signature)
 			}
 			// the output is not used here, but should be applyed to block in practice
-			_, err := tpke.AggregateAndVerify(n.globalPubKey, n.finalBlockHash, len(n.neighbors)*2/3, shares, n.scaler)
+			_, err := tpke.AggregateAndVerify(n.globalPubKey, n.finalBlockHash.Bytes(), len(n.neighbors)*2/3+1, shares, n.scaler)
 			if err != nil {
 				// wait for another agree message until change view
 				return
@@ -289,7 +308,7 @@ func (n *Node) HandleMsg(m *msgutil.Payload) {
 			n.viewLock = false
 		}
 	} else if m.Type() == payload.ChangeViewType {
-		changeView := m.Payload().(msgutil.ChangeView)
+		changeView := m.Payload().(message.ChangeView)
 
 		// count vote
 		if changeView.NewViewNumber == n.view+1 && !n.viewLock {
@@ -305,7 +324,7 @@ func (n *Node) HandleMsg(m *msgutil.Payload) {
 	}
 }
 
-func (n *Node) MsgLoop() {
+func (n *Node) EventLoop() {
 	for {
 		select {
 		case m := <-n.messageHandler:

@@ -1,4 +1,4 @@
-package util
+package message
 
 import (
 	"github.com/nspcc-dev/neo-go/pkg/io"
@@ -13,10 +13,10 @@ type Commit struct {
 
 func (c Commit) EncodeBinary(w *io.BinWriter) {
 	w.WriteBytes(c.FinalHash[:])
-	w.WriteBytes(c.Signature[:])
+	w.WriteBytes(c.Signature)
 }
 
 func (c Commit) DecodeBinary(r *io.BinReader) {
 	r.ReadBytes(c.FinalHash[:])
-	r.ReadBytes(c.Signature[:])
+	r.ReadBytes(c.Signature)
 }
