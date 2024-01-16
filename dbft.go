@@ -208,6 +208,9 @@ func (n *Node) HandleMsg(m *message.Payload) {
 			}
 			share := EncodeDecryptionShare(s)
 
+			// lock change view
+			n.viewLock = true
+
 			// broadcast finalize
 			msg := &message.Payload{
 				Message: message.Message{
@@ -274,9 +277,6 @@ func (n *Node) HandleMsg(m *message.Payload) {
 
 			finalTxList = append(finalTxList, n.txList...)
 			n.proposal.TxHash = types.DeriveSha(types.Transactions(finalTxList), trie.NewStackTrie(nil))
-
-			// lock change view
-			n.viewLock = true
 
 			// broadcast commit
 			msg := &message.Payload{
