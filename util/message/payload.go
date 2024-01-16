@@ -3,7 +3,6 @@ package message
 import (
 	"fmt"
 
-	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/nspcc-dev/dbft/payload"
 	"github.com/nspcc-dev/neo-go/pkg/io"
@@ -11,9 +10,7 @@ import (
 )
 
 const (
-	extraSeal = crypto.SignatureLength // Fixed number of extra-data suffix bytes reserved for a single signer seal
-
-	AgreeType payload.MessageType = 0x22
+	FinalizeType payload.MessageType = 0x22 // A new message type for decryption sharing
 )
 
 type (

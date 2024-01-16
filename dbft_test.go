@@ -1,6 +1,7 @@
 package dbft
 
 import (
+	"bytes"
 	"math/big"
 	"testing"
 
@@ -83,23 +84,33 @@ func TestDBFT(t *testing.T) {
 		nodes[i].Connect(nodes)
 	}
 
-	// create an enveloped tx, use string as an example
-	msg := "This is some necessary info of an enveloped tx"
-	seed := tpke.RandPG1()
-	es := globalpub.Encrypt(seed)
-	et, err := tpke.AESEncrypt(seed, []byte(msg))
+	// create an enveloped tx, the nonce number should leave a space for carrier tx
+	tx := types.NewTransaction(1, ZeroAddress, big.NewInt(0), 0, big.NewInt(0), nil)
+	buf := new(bytes.Buffer)
+	err = tx.EncodeRLP(buf)
 	if err != nil {
 		t.Fatalf(err.Error())
 	}
+
+	// generate a random key for encryption
+	seed := tpke.RandPG1()
+	es := globalpub.Encrypt(seed)
+	et, err := tpke.AESEncrypt(seed, buf.Bytes())
+	if err != nil {
+		t.Fatalf(err.Error())
+	}
+
+	// build a envelope
 	envelope := &transaction.Envelope{
+		ExpireHeight:         1,
 		EncryptedSeed:        es,
 		EncryptedTransaction: et,
 	}
 
-	// wrap the enveloped tx into a normal transfer
-	tx := types.NewTransaction(1, ZeroAddress, big.NewInt(0), 0, big.NewInt(0), envelope.ToBytes())
+	// wrap the envelope into a normal transfer, the to address of carrier will be specified to a fixed one, here use zero address
+	carrier := types.NewTransaction(0, ZeroAddress, big.NewInt(0), 0, big.NewInt(0), envelope.ToBytes())
 	for i := 0; i < 7; i++ {
-		nodes[i].PendTx(tx)
+		nodes[i].PendTx(carrier)
 	}
 
 	// start a consensus
@@ -120,7 +131,7 @@ func TestDBFT(t *testing.T) {
 		}
 	}
 
-	// handle agree
+	// handle finalize
 	for i := 0; i < 7; i++ {
 		for j := 0; j < 6; j++ {
 			nodes[i].EventLoopOnce()
@@ -134,9 +145,17 @@ func TestDBFT(t *testing.T) {
 		}
 	}
 
+	hash := nodes[0].proposal.Hash()
+	sig := nodes[0].localSig
 	for i := 0; i < 7; i++ {
 		if nodes[i].height < 1 {
 			t.Fatalf("invalid consensus")
+		}
+		if nodes[i].proposal.Hash().Cmp(hash) != 0 {
+			t.Fatalf("invalid hash")
+		}
+		if !bytes.Equal(nodes[i].localSig, sig) {
+			t.Fatalf("invalid bls sig")
 		}
 	}
 }
