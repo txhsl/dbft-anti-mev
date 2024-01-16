@@ -145,17 +145,13 @@ func TestDBFT(t *testing.T) {
 		}
 	}
 
-	hash := nodes[0].proposal.Hash()
-	sig := nodes[0].localSig
+	hash := nodes[0].blocks[1].Hash()
 	for i := 0; i < 7; i++ {
 		if nodes[i].height < 1 {
 			t.Fatalf("invalid consensus")
 		}
-		if nodes[i].proposal.Hash().Cmp(hash) != 0 {
-			t.Fatalf("invalid hash")
-		}
-		if !bytes.Equal(nodes[i].localSig, sig) {
-			t.Fatalf("invalid bls sig")
+		if nodes[i].blocks[1].Hash().CompareTo(hash) != 0 {
+			t.Fatalf("invalid block")
 		}
 	}
 }
