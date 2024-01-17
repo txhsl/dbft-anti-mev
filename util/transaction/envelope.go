@@ -2,6 +2,7 @@ package transaction
 
 import (
 	"encoding/binary"
+	"math/big"
 
 	"github.com/txhsl/tpke"
 )
@@ -12,14 +13,14 @@ const (
 )
 
 type Envelope struct {
-	ExpireHeight         uint64
+	EncryptHeight        uint64
 	EncryptedSeed        *tpke.CipherText
 	EncryptedTransaction []byte
 }
 
 func (e Envelope) ToBytes() []byte {
 	b := make([]byte, SeedLen+Uint64Len+len(e.EncryptedTransaction))
-	binary.PutUvarint(b, e.ExpireHeight)
+	binary.PutUvarint(b, e.EncryptHeight)
 	copy(b[Uint64Len:Uint64Len+SeedLen], e.EncryptedSeed.ToBytes())
 	copy(b[Uint64Len+SeedLen:], e.EncryptedTransaction)
 	return b
@@ -32,8 +33,13 @@ func BytesToEnvelope(b []byte) (*Envelope, error) {
 		return nil, err
 	}
 	return &Envelope{
-		ExpireHeight:         h,
+		EncryptHeight:        h,
 		EncryptedSeed:        es,
 		EncryptedTransaction: b[Uint64Len+SeedLen:],
 	}, nil
+}
+
+func (e Envelope) ComputeFee() *big.Int {
+	// can be a base fee + bytes fee (in case of big tx), here we return 0
+	return big.NewInt(0)
 }

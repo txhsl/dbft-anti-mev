@@ -5,7 +5,6 @@ import (
 	"math/big"
 	"testing"
 
-	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/trie"
 	"github.com/nspcc-dev/dbft/payload"
@@ -14,8 +13,6 @@ import (
 	"github.com/txhsl/dbft-anti-mev/util/transaction"
 	"github.com/txhsl/tpke"
 )
-
-var ZeroAddress = common.HexToAddress("0x0000000000000000000000000000000000000000")
 
 // The scaler works well when the network size is smaller than 9, other wise overflow
 func TestPrepareRequestHandler(t *testing.T) {
@@ -31,7 +28,7 @@ func TestPrepareRequestHandler(t *testing.T) {
 	// setup node, note that dkg index start from 1 to 7, due to mathematical reason
 	nodes := make([]*Node, 7)
 	for i := 0; i < 7; i++ {
-		nodes[i] = NewNode(byte(i+1), prvs[i+1], prvs[i+1].GetPublicKey(), globalpub, dkg.GetScaler())
+		nodes[i] = NewNode(byte(i+1), prvs[i+1], prvs[i+1].GetPublicKey(), globalpub, 0, dkg.GetScaler())
 	}
 	nodes[0].Connect(nodes)
 
@@ -65,6 +62,62 @@ func TestPrepareRequestHandler(t *testing.T) {
 	nodes[0].HandleMsg(prepareRequest)
 }
 
+func TestEnvelopePool(t *testing.T) {
+	dkg := tpke.NewDKG(7, 4)
+	dkg.Prepare()
+	err := dkg.Verify()
+	if err != nil {
+		t.Fatalf(err.Error())
+	}
+	prvs := dkg.GetPrivateKeys()
+	globalpub := dkg.PublishGlobalPublicKey()
+
+	// setup node, note that dkg index start from 1 to 7, due to mathematical reason
+	nodes := make([]*Node, 7)
+	for i := 0; i < 7; i++ {
+		nodes[i] = NewNode(byte(i+1), prvs[i+1], prvs[i+1].GetPublicKey(), globalpub, 0, dkg.GetScaler())
+	}
+	nodes[0].Connect(nodes)
+
+	// create an enveloped tx, the nonce number should leave a space for carrier tx
+	tx := types.NewTransaction(1, ZeroAddress, big.NewInt(0), 0, big.NewInt(0), nil)
+	buf := new(bytes.Buffer)
+	err = tx.EncodeRLP(buf)
+	if err != nil {
+		t.Fatalf(err.Error())
+	}
+
+	// generate a random key for encryption
+	seed := tpke.RandPG1()
+	es := globalpub.Encrypt(seed)
+	et, err := tpke.AESEncrypt(seed, buf.Bytes())
+	if err != nil {
+		t.Fatalf(err.Error())
+	}
+
+	// build a envelope
+	envelope := &transaction.Envelope{
+		EncryptHeight:        0,
+		EncryptedSeed:        es,
+		EncryptedTransaction: et,
+	}
+
+	// wrap the envelope into a normal transfer, the to address of carrier will be specified to a fixed one, here use zero address
+	carrier := types.NewTransaction(0, ZeroAddress, envelope.ComputeFee(), 0, big.NewInt(0), envelope.ToBytes())
+	nodes[0].PendEnvelopedTx(carrier)
+	if len(nodes[0].envelopePool) < 1 {
+		t.Fatalf("fail to pend")
+	}
+
+	// increase keyEnabledHeight and expire the envelope
+	nodes[0].keyEnabledHeight = 1
+	nodes[0].RefreshEnvelopePool()
+
+	if len(nodes[0].envelopePool) > 0 {
+		t.Fatalf("fail to expire")
+	}
+}
+
 func TestDBFT(t *testing.T) {
 	dkg := tpke.NewDKG(7, 4)
 	dkg.Prepare()
@@ -78,7 +131,7 @@ func TestDBFT(t *testing.T) {
 	// setup node, note that dkg index start from 1 to 7, due to mathematical reason
 	nodes := make([]*Node, 7)
 	for i := 0; i < 7; i++ {
-		nodes[i] = NewNode(byte(i+1), prvs[i+1], prvs[i+1].GetPublicKey(), globalpub, dkg.GetScaler())
+		nodes[i] = NewNode(byte(i+1), prvs[i+1], prvs[i+1].GetPublicKey(), globalpub, 0, dkg.GetScaler())
 	}
 	for i := 0; i < 7; i++ {
 		nodes[i].Connect(nodes)
@@ -102,13 +155,13 @@ func TestDBFT(t *testing.T) {
 
 	// build a envelope
 	envelope := &transaction.Envelope{
-		ExpireHeight:         1,
+		EncryptHeight:        0,
 		EncryptedSeed:        es,
 		EncryptedTransaction: et,
 	}
 
 	// wrap the envelope into a normal transfer, the to address of carrier will be specified to a fixed one, here use zero address
-	carrier := types.NewTransaction(0, ZeroAddress, big.NewInt(0), 0, big.NewInt(0), envelope.ToBytes())
+	carrier := types.NewTransaction(0, ZeroAddress, envelope.ComputeFee(), 0, big.NewInt(0), envelope.ToBytes())
 	for i := 0; i < 7; i++ {
 		nodes[i].PendEnvelopedTx(carrier)
 	}
