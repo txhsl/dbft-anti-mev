@@ -37,7 +37,7 @@ func TestPrepareRequestHandler(t *testing.T) {
 
 	// send a tx
 	tx := types.NewTransaction(1, ZeroAddress, big.NewInt(0), 0, big.NewInt(0), nil)
-	nodes[0].PendTx(tx)
+	nodes[0].PendLegacyTx(tx)
 
 	// build header and msg
 	txs := make([]*types.Transaction, 1)
@@ -110,7 +110,7 @@ func TestDBFT(t *testing.T) {
 	// wrap the envelope into a normal transfer, the to address of carrier will be specified to a fixed one, here use zero address
 	carrier := types.NewTransaction(0, ZeroAddress, big.NewInt(0), 0, big.NewInt(0), envelope.ToBytes())
 	for i := 0; i < 7; i++ {
-		nodes[i].PendTx(carrier)
+		nodes[i].PendEnvelopedTx(carrier)
 	}
 
 	// start a consensus
