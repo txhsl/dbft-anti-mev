@@ -295,14 +295,16 @@ func (n *Node) HandleMsg(m *message.Payload) {
 			// try decrypt tx data
 			bs := make([][]byte, 0)           // encrypted transactions
 			cs := make([]*tpke.CipherText, 0) // seeds for decryption
-			for _, v := range n.txList {
-				envelope, err := transaction.BytesToEnvelope(v.Data())
-				if err != nil {
-					continue
-				}
-				if envelope.ExpireHeight > n.height {
-					bs = append(bs, envelope.EncryptedTransaction)
-					cs = append(cs, envelope.EncryptedSeed)
+			for i, v := range n.txList {
+				if i < n.envelopNum {
+					envelope, err := transaction.BytesToEnvelope(v.Data())
+					if err != nil {
+						continue
+					}
+					if envelope.ExpireHeight > n.height {
+						bs = append(bs, envelope.EncryptedTransaction)
+						cs = append(cs, envelope.EncryptedSeed)
+					}
 				}
 			}
 			inputs := make(map[int][]*tpke.DecryptionShare)
