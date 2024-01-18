@@ -38,7 +38,9 @@ type Node struct {
 	// message pool
 	prepareResponses map[uint16]*message.PrepareResponse
 	finalizes        map[uint16]*message.Finalize
+	dbftFinalized    bool
 	commits          map[uint16]*message.Commit
+	dbftCommited     bool
 	changeViews      map[uint16]*message.ChangeView
 
 	// P2P channel, handler and mempool
@@ -71,7 +73,9 @@ func NewNode(index byte, prv *tpke.PrivateKey, pub *tpke.PublicKey, globalPub *t
 		proposal:         nil,
 		prepareResponses: make(map[uint16]*message.PrepareResponse),
 		finalizes:        make(map[uint16]*message.Finalize),
+		dbftFinalized:    false,
 		commits:          make(map[uint16]*message.Commit),
+		dbftCommited:     false,
 		changeViews:      make(map[uint16]*message.ChangeView),
 	}
 }
@@ -317,7 +321,7 @@ func (n *Node) HandleMsg(m *message.Payload) {
 		// count vote
 		n.finalizes[m.ValidatorIndex()] = &finalize
 
-		if len(n.finalizes) >= len(n.neighbors)*2/3+1 {
+		if len(n.finalizes) >= len(n.neighbors)*2/3+1 && !n.dbftFinalized {
 			// try decrypt tx data
 			bs := make([][]byte, 0)           // encrypted transactions
 			cs := make([]*tpke.CipherText, 0) // seeds for decryption
@@ -341,6 +345,7 @@ func (n *Node) HandleMsg(m *message.Payload) {
 				// wait for another finalize message and will not change view
 				return
 			}
+			n.dbftFinalized = true
 
 			// build the final block
 			finalTxList := make([]*types.Transaction, 0)
@@ -401,7 +406,7 @@ func (n *Node) HandleMsg(m *message.Payload) {
 			n.commits[m.ValidatorIndex()] = &commit
 		}
 
-		if len(n.commits) >= len(n.neighbors)*2/3+1 {
+		if len(n.commits) >= len(n.neighbors)*2/3+1 && !n.dbftCommited {
 			// compute the bls signature
 			shares := make(map[int]*tpke.SignatureShare, len(n.commits))
 			for i, v := range n.commits {
@@ -413,6 +418,7 @@ func (n *Node) HandleMsg(m *message.Payload) {
 				// wait for another commit message and will not change view
 				return
 			}
+			n.dbftCommited = true
 
 			// finish
 			n.blocks[n.height+1] = &Block{
@@ -431,7 +437,9 @@ func (n *Node) HandleMsg(m *message.Payload) {
 			n.envelopePool = make([]*types.Transaction, 0)
 			n.prepareResponses = make(map[uint16]*message.PrepareResponse)
 			n.finalizes = make(map[uint16]*message.Finalize)
+			n.dbftFinalized = false
 			n.commits = make(map[uint16]*message.Commit)
+			n.dbftCommited = false
 			n.changeViews = make(map[uint16]*message.ChangeView)
 
 			// broadcast the new block
@@ -446,7 +454,7 @@ func (n *Node) HandleMsg(m *message.Payload) {
 		}
 
 		// change view
-		if len(n.changeViews) > len(n.neighbors)*2/3 {
+		if len(n.changeViews) == len(n.neighbors)*2/3+1 {
 			n.view += 1
 			n.txList = nil
 			n.proposal = nil
