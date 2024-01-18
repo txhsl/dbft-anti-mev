@@ -317,7 +317,7 @@ func (n *Node) HandleMsg(m *message.Payload) {
 		// count vote
 		n.finalizes[m.ValidatorIndex()] = &finalize
 
-		if len(n.finalizes) == len(n.neighbors)*2/3+1 {
+		if len(n.finalizes) >= len(n.neighbors)*2/3+1 {
 			// try decrypt tx data
 			bs := make([][]byte, 0)           // encrypted transactions
 			cs := make([]*tpke.CipherText, 0) // seeds for decryption
@@ -401,7 +401,7 @@ func (n *Node) HandleMsg(m *message.Payload) {
 			n.commits[m.ValidatorIndex()] = &commit
 		}
 
-		if len(n.commits) == len(n.neighbors)*2/3+1 {
+		if len(n.commits) >= len(n.neighbors)*2/3+1 {
 			// compute the bls signature
 			shares := make(map[int]*tpke.SignatureShare, len(n.commits))
 			for i, v := range n.commits {
