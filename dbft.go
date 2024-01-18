@@ -338,7 +338,7 @@ func (n *Node) HandleMsg(m *message.Payload) {
 			}
 			seeds, err := tpke.Decrypt(cs, inputs, n.globalPubKey, len(n.neighbors)*2/3, int(n.scaler))
 			if err != nil {
-				// wait for another finalize message until change view
+				// wait for another finalize message and will not change view
 				return
 			}
 
@@ -410,7 +410,7 @@ func (n *Node) HandleMsg(m *message.Payload) {
 			// the global public key is necessary for verification
 			sig, err := tpke.AggregateAndVerifySig(n.globalPubKey, n.proposal.Hash().Bytes(), len(n.neighbors)*2/3+1, shares, int(n.scaler))
 			if err != nil {
-				// wait for another finalize message until change view
+				// wait for another commit message and will not change view
 				return
 			}
 
