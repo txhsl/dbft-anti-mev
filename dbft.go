@@ -48,6 +48,9 @@ type Node struct {
 	messageHandler chan *message.Payload
 	legacyPool     []*types.Transaction // the mempool for legacy tx
 	envelopePool   []*types.Transaction // an independent mempool only handles enveloped tx
+
+	// stop signal, just for testing
+	stopSignalHandler chan any
 }
 
 // set up a node based on dkg
@@ -60,23 +63,28 @@ func NewNode(index byte, prv *tpke.PrivateKey, pub *tpke.PublicKey, globalPub *t
 		globalPubKey:     globalPub,
 		keyEnabledHeight: keyEnabledHeight,
 		scaler:           scaler,
-		blocks:           make(map[uint64]*Block),
-		height:           0,
-		view:             0,
-		viewLock:         false,
-		neighbors:        make([]chan<- *message.Payload, 0),
-		messageHandler:   make(chan *message.Payload, 100),
-		legacyPool:       make([]*types.Transaction, 0),
-		envelopePool:     make([]*types.Transaction, 0),
-		txList:           nil,
-		envelopNum:       0,
-		proposal:         nil,
+
+		blocks:     make(map[uint64]*Block),
+		height:     0,
+		view:       0,
+		viewLock:   false,
+		txList:     nil,
+		envelopNum: 0,
+		proposal:   nil,
+
 		prepareResponses: make(map[uint16]*message.PrepareResponse),
 		finalizes:        make(map[uint16]*message.Finalize),
 		dbftFinalized:    false,
 		commits:          make(map[uint16]*message.Commit),
 		dbftCommited:     false,
 		changeViews:      make(map[uint16]*message.ChangeView),
+
+		neighbors:      make([]chan<- *message.Payload, 0),
+		messageHandler: make(chan *message.Payload, 100),
+		legacyPool:     make([]*types.Transaction, 0),
+		envelopePool:   make([]*types.Transaction, 0),
+
+		stopSignalHandler: make(chan any, 1),
 	}
 }
 
@@ -473,6 +481,12 @@ func (n *Node) EventLoop() {
 		select {
 		case m := <-n.messageHandler:
 			n.HandleMsg(m)
+		case <-n.stopSignalHandler:
+			return
 		}
 	}
+}
+
+func (n *Node) StopLoop() {
+	n.stopSignalHandler <- nil
 }

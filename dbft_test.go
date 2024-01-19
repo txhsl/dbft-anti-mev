@@ -2,8 +2,10 @@ package dbft
 
 import (
 	"bytes"
+	"fmt"
 	"math/big"
 	"testing"
+	"time"
 
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/trie"
@@ -118,7 +120,7 @@ func TestEnvelopePool(t *testing.T) {
 	}
 }
 
-func TestDBFT(t *testing.T) {
+func TestOneRoundDBFT(t *testing.T) {
 	dkg := tpke.NewDKG(7, 4)
 	dkg.Prepare()
 	err := dkg.Verify()
@@ -205,6 +207,72 @@ func TestDBFT(t *testing.T) {
 		}
 		if nodes[i].blocks[1].Hash().CompareTo(hash) != 0 {
 			t.Fatalf("invalid block")
+		}
+	}
+}
+
+func TestLoopDBFT(t *testing.T) {
+	dkg := tpke.NewDKG(7, 4)
+	dkg.Prepare()
+	err := dkg.Verify()
+	if err != nil {
+		t.Fatalf(err.Error())
+	}
+	prvs := dkg.GetPrivateKeys()
+	globalpub := dkg.PublishGlobalPublicKey()
+
+	// setup node, note that dkg index start from 1 to 7, due to mathematical reason
+	nodes := make([]*Node, 7)
+	for i := 0; i < 7; i++ {
+		nodes[i] = NewNode(byte(i+1), prvs[i+1], prvs[i+1].GetPublicKey(), globalpub, 0, dkg.GetScaler())
+	}
+	for i := 0; i < 7; i++ {
+		nodes[i].Connect(nodes)
+		go nodes[i].EventLoop()
+	}
+
+	for i := 0; i < 3; i++ {
+		// create an enveloped tx, the nonce number should leave a space for carrier tx
+		tx := types.NewTransaction(1, ZeroAddress, big.NewInt(0), 0, big.NewInt(0), nil)
+		buf := new(bytes.Buffer)
+		err = tx.EncodeRLP(buf)
+		if err != nil {
+			t.Fatalf(err.Error())
+		}
+
+		// generate a random key for encryption
+		seed := tpke.RandPG1()
+		es := globalpub.Encrypt(seed)
+		et, err := tpke.AESEncrypt(seed, buf.Bytes())
+		if err != nil {
+			t.Fatalf(err.Error())
+		}
+
+		// build a envelope
+		envelope := &transaction.Envelope{
+			EncryptHeight:        0,
+			EncryptedSeed:        es,
+			EncryptedTransaction: et,
+		}
+
+		// wrap the envelope into a normal transfer, the to address of carrier will be specified to a fixed one, here use zero address
+		carrier := types.NewTransaction(0, ZeroAddress, envelope.ComputeFee(), 0, big.NewInt(0), envelope.ToBytes())
+		for j := 0; j < 7; j++ {
+			nodes[j].PendEnvelopedTx(carrier)
+		}
+
+		// start a consensus
+		nodes[i].Propose()
+		time.Sleep(time.Second)
+	}
+
+	for i := 0; i < 7; i++ {
+		nodes[i].StopLoop()
+		for j := 1; j < 4; j++ {
+			fmt.Println(nodes[i].blocks[uint64(j)].Hash())
+		}
+		if nodes[i].height != 3 {
+			t.Fatalf("invalid consensus")
 		}
 	}
 }
