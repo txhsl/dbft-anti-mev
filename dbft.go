@@ -3,6 +3,7 @@ package dbft
 import (
 	"bytes"
 	"errors"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -261,6 +262,28 @@ func (n *Node) HandleMsg(m *message.Payload) {
 		n.proposal = h
 
 		// broadcast response
+		if !txsChecked {
+			// request missing txs
+		} else if !hChecked {
+			// request change view
+			msg := &message.Payload{
+				Message: message.Message{
+					Type:           payload.ChangeViewType,
+					ValidatorIndex: n.index,
+					BlockIndex:     m.BlockIndex,
+					ViewNumber:     m.ViewNumber(),
+				},
+			}
+			msg.SetPayload(message.ChangeView{
+				NewViewNumber: m.ViewNumber() + 1,
+				Timestamp:     uint64(time.Now().Unix()),
+				Reason:        payload.CVChangeAgreement,
+			})
+			msg.Sign(n.prv)
+			for i := 0; i < len(n.neighbors); i++ {
+				n.neighbors[i] <- msg
+			}
+		}
 		if txsChecked && hChecked {
 			msg := &message.Payload{
 				Message: message.Message{
