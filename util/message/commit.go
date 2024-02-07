@@ -7,7 +7,7 @@ import (
 
 type Commit struct {
 	FinalHash util.Uint256
-	// commit.signature is the signature of final block
+	// commit.signature is the signature share of final block, needs 192 bytes for each, and remains 192 bytes after aggregation
 	Signature []byte
 }
 

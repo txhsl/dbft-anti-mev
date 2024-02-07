@@ -18,6 +18,7 @@ type Envelope struct {
 	EncryptedTransaction []byte
 }
 
+// an envelope costs 392 bytes + tx length
 func (e Envelope) ToBytes() []byte {
 	b := make([]byte, SeedLen+Uint64Len+len(e.EncryptedTransaction))
 	binary.PutUvarint(b, e.EncryptHeight)
