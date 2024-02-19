@@ -6,7 +6,7 @@ require (
 	github.com/ethereum/go-ethereum v1.13.8
 	github.com/nspcc-dev/dbft v0.0.0-20230515113611-25db6ba61d5c
 	github.com/nspcc-dev/neo-go v0.103.1
-	github.com/txhsl/tpke v0.2.0
+	github.com/txhsl/tpke v0.2.1
 	golang.org/x/crypto v0.17.0
 )
 
